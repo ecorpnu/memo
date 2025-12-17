@@ -1,0 +1,8 @@
+{
+  "name": "Memoria - Digital Twin Recorder",
+  "description": "A sophisticated video diary application powered by Gemini to help capture your life's memories and build a digital twin.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
