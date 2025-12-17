@@ -2,10 +2,10 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { AspectRatio, Question, QAPair } from '../types';
 import { useLiveSession } from '../hooks/useLiveSession';
 import { DEFAULT_QUESTIONS, parseQuestionsFile } from '../services/questionService';
-import { Download, Upload, Settings, Camera, Mic, Square, Play, Pause, RefreshCw, ChevronRight, X } from 'lucide-react';
+import { Download, Upload, Settings2, Camera, Mic, Square, Play, Pause, ChevronRight, X, Video, FileText, Sparkles } from 'lucide-react';
 
 const Recorder: React.FC = () => {
-  // Access environment variable dynamically to ensure we catch any runtime injection (e.g. from window.aistudio)
+  // Access environment variable dynamically
   const apiKey = process.env.API_KEY;
 
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -16,10 +16,16 @@ const Recorder: React.FC = () => {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [qaPairs, setQaPairs] = useState<QAPair[]>([]);
   const [showSettings, setShowSettings] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [audioLevel, setAudioLevel] = useState(0);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const transcriptEndRef = useRef<HTMLDivElement>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
 
   // System instruction for Gemini
   const currentQuestionText = questions[currentQuestionIndex]?.text || "";
@@ -50,7 +56,6 @@ const Recorder: React.FC = () => {
 
   // Initialize Camera with fallback strategy
   const initCamera = useCallback(async () => {
-    // Stop existing tracks
     if (stream) {
       stream.getTracks().forEach(track => track.stop());
     }
@@ -65,82 +70,103 @@ const Recorder: React.FC = () => {
     const preferredConstraints: MediaStreamConstraints = {
       audio: true,
       video: {
-        facingMode: 'user', // Try front camera first
+        facingMode: 'user',
         ...constraintsMap[aspectRatio]
       }
     };
 
-    const standardConstraints: MediaStreamConstraints = {
-        audio: true,
-        video: {
-             ...constraintsMap[aspectRatio] // Try resolution without facing mode
-        }
-    };
-    
-    const fallbackConstraints: MediaStreamConstraints = {
-        audio: true,
-        video: true // Just get any camera
-    };
-
     try {
-      let newStream: MediaStream;
-      try {
-        newStream = await navigator.mediaDevices.getUserMedia(preferredConstraints);
-      } catch (e1) {
-        console.warn("Preferred constraints failed, trying standard...", e1);
-        try {
-             newStream = await navigator.mediaDevices.getUserMedia(standardConstraints);
-        } catch (e2) {
-            console.warn("Standard constraints failed, trying fallback...", e2);
-            newStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
-        }
-      }
-      
+      const newStream = await navigator.mediaDevices.getUserMedia(preferredConstraints);
       setStream(newStream);
       if (videoRef.current) {
         videoRef.current.srcObject = newStream;
       }
     } catch (err) {
       console.error("Error accessing media devices.", err);
-      alert("Could not access camera/microphone. Please ensure permissions are granted.");
+      try {
+        const fallbackStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        setStream(fallbackStream);
+        if (videoRef.current) {
+          videoRef.current.srcObject = fallbackStream;
+        }
+      } catch (fallbackErr) {
+        alert("Could not access camera/microphone. Please ensure permissions are granted.");
+      }
     }
-  }, [aspectRatio]); // Don't include stream in dependency to avoid loop, though we handle it inside
+  }, [aspectRatio]);
 
-  // Initial load
+  // Audio Visualization setup
+  useEffect(() => {
+    if (!stream) return;
+
+    // Create a separate audio context for visualization to not interfere with recording/live API
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    audioContextRef.current = audioContext;
+    const source = audioContext.createMediaStreamSource(stream);
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 64;
+    source.connect(analyser);
+    analyserRef.current = analyser;
+
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    let lastUpdate = 0;
+
+    const updateAudioLevel = (time: number) => {
+      // Throttle updates to ~20fps to improve React performance
+      if (time - lastUpdate > 50) {
+        analyser.getByteFrequencyData(dataArray);
+        // Calculate average volume
+        const average = dataArray.reduce((acc, val) => acc + val, 0) / bufferLength;
+        setAudioLevel(average);
+        lastUpdate = time;
+      }
+      animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
+    };
+
+    animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
+
+    return () => {
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+      if (audioContextRef.current) audioContextRef.current.close();
+    };
+  }, [stream]);
+
   useEffect(() => {
     initCamera();
     return () => {
-      // Cleanup on unmount
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-      }
+      if (stream) stream.getTracks().forEach(track => track.stop());
       disconnectLive();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Re-init camera when ratio changes (only if not recording)
   useEffect(() => {
-    // We need to check if the stream is actually active and matches expectations, 
-    // but for simplicity we just re-init if not recording.
     if (!isRecording) {
-      // We use a timeout to avoid rapid switching if user clicks fast
-      const timeoutId = setTimeout(() => {
-          initCamera();
-      }, 500);
+      const timeoutId = setTimeout(() => initCamera(), 500);
       return () => clearTimeout(timeoutId);
     }
   }, [aspectRatio, isRecording, initCamera]);
 
+  // Timer logic
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval>;
+    if (isRecording && !isPaused) {
+      interval = setInterval(() => {
+        setDuration(prev => prev + 1);
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [isRecording, isPaused]);
+
+  // Auto-scroll transcript
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [currentTranscript]);
 
   const startRecording = async () => {
     if (!stream) return;
-    
-    // 1. Connect Gemini Live
     await connectLive(stream);
-
-    // 2. Start MediaRecorder
-    // Check supported mime types
+    
     const mimeType = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 
                      MediaRecorder.isTypeSupported('video/webm;codecs=h264') ? 'video/webm;codecs=h264' :
                      'video/webm';
@@ -153,27 +179,21 @@ const Recorder: React.FC = () => {
       if (e.data.size > 0) chunksRef.current.push(e.data);
     };
 
-    mediaRecorder.start(1000); // chunk every second
+    mediaRecorder.start(1000);
     setIsRecording(true);
     setIsPaused(false);
+    setDuration(0);
     resetTranscript();
   };
 
   const togglePause = () => {
     if (!mediaRecorderRef.current) return;
-
     if (isPaused) {
-        // Resume
-        if (mediaRecorderRef.current.state === 'paused') {
-            mediaRecorderRef.current.resume();
-        }
+        if (mediaRecorderRef.current.state === 'paused') mediaRecorderRef.current.resume();
         resumeLive();
         setIsPaused(false);
     } else {
-        // Pause
-        if (mediaRecorderRef.current.state === 'recording') {
-            mediaRecorderRef.current.pause();
-        }
+        if (mediaRecorderRef.current.state === 'recording') mediaRecorderRef.current.pause();
         pauseLive();
         setIsPaused(true);
     }
@@ -181,34 +201,22 @@ const Recorder: React.FC = () => {
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
-      // Setup listener for the final stop event to ensure all chunks are collected
       mediaRecorderRef.current.onstop = () => {
           disconnectLive();
           setIsRecording(false);
           setIsPaused(false);
-          
-          // Save the final chunk of Q&A
           const finalPair = saveCurrentQAPair();
-          
-          // Construct the complete list for download including the one just saved
           const finalData = finalPair ? [...qaPairs, finalPair] : qaPairs;
-
-          // Prompt download
           downloadVideo();
           downloadJSON(finalData);
       };
-
       mediaRecorderRef.current.stop();
     }
   };
 
   const saveCurrentQAPair = (): QAPair | null => {
-    // Only save if there is content
     if (currentTranscript && currentTranscript.trim().length > 0) {
-        const newPair: QAPair = {
-            Q: questions[currentQuestionIndex].text,
-            A: currentTranscript
-        };
+        const newPair: QAPair = { Q: questions[currentQuestionIndex].text, A: currentTranscript };
         setQaPairs(prev => [...prev, newPair]);
         resetTranscript();
         return newPair;
@@ -218,11 +226,7 @@ const Recorder: React.FC = () => {
   };
 
   const nextQuestion = () => {
-    // If we are paused, resume so we can capture the next question
-    if (isPaused) {
-        togglePause();
-    }
-    
+    if (isPaused) togglePause();
     saveCurrentQAPair();
     if (currentQuestionIndex < questions.length - 1) {
         setCurrentQuestionIndex(prev => prev + 1);
@@ -234,10 +238,9 @@ const Recorder: React.FC = () => {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       try {
-        const parsedQuestions = await parseQuestionsFile(e.target.files[0]);
-        setQuestions(parsedQuestions);
+        const parsed = await parseQuestionsFile(e.target.files[0]);
+        setQuestions(parsed);
         setCurrentQuestionIndex(0);
-        alert(`Loaded ${parsedQuestions.length} questions.`);
       } catch (err) {
         alert("Failed to parse question file.");
       }
@@ -246,11 +249,8 @@ const Recorder: React.FC = () => {
 
   const downloadVideo = () => {
     if (chunksRef.current.length === 0) return;
-    
-    // Determine extension based on recorded mimeType
     const mimeType = mediaRecorderRef.current?.mimeType || 'video/mp4';
     const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
-    
     const blob = new Blob(chunksRef.current, { type: mimeType });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -262,8 +262,7 @@ const Recorder: React.FC = () => {
 
   const downloadJSON = (dataOverride?: QAPair[]) => {
     const data = dataOverride || qaPairs;
-    const dataStr = JSON.stringify(data, null, 2);
-    const blob = new Blob([dataStr], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -272,7 +271,6 @@ const Recorder: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  // Helper to get container aspect ratio class
   const getAspectRatioClass = () => {
     switch (aspectRatio) {
       case AspectRatio.Portrait: return 'aspect-[9/16]';
@@ -283,191 +281,241 @@ const Recorder: React.FC = () => {
     }
   };
 
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
   return (
-    <div className="min-h-screen bg-pastel-cream p-4 md:p-8 flex flex-col items-center font-sans">
-      
+    <div className="min-h-screen flex flex-col items-center p-4 lg:p-8 font-sans bg-pastel-cream text-pastel-slate">
       {/* Header */}
-      <header className="w-full max-w-4xl flex justify-between items-center mb-6">
-        <div>
-           <h1 className="text-3xl font-serif text-pastel-slate font-bold">Memoria</h1>
-           <p className="text-sm text-gray-500">Voice of your digital serf</p>
+      <header className="w-full max-w-6xl flex justify-between items-center mb-6 lg:mb-10">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-pastel-slate text-white rounded-xl flex items-center justify-center shadow-lg shadow-pastel-slate/20">
+            <Sparkles className="w-5 h-5" />
+          </div>
+          <div>
+             <h1 className="text-2xl font-serif font-bold tracking-tight text-pastel-charcoal">Memoria</h1>
+             <p className="text-xs text-gray-500 font-medium tracking-wide uppercase">Digital Twin Recorder</p>
+          </div>
         </div>
         
-        <div className="flex gap-2">
-            <button 
-                onClick={() => setShowSettings(!showSettings)}
-                className="p-2 rounded-full hover:bg-pastel-lavender transition-colors"
-            >
-                <Settings className="w-6 h-6 text-pastel-slate" />
-            </button>
-        </div>
+        <button 
+            onClick={() => setShowSettings(!showSettings)}
+            className="group flex items-center gap-2 px-4 py-2 bg-white border border-gray-100 rounded-full shadow-sm hover:shadow-md hover:border-pastel-slate/30 transition-all"
+        >
+            <Settings2 className="w-4 h-4 text-gray-500 group-hover:text-pastel-slate transition-colors" />
+            <span className="text-sm font-medium text-gray-600 group-hover:text-pastel-slate">Settings</span>
+        </button>
       </header>
 
       {/* Settings Panel */}
       {showSettings && (
-        <div className="w-full max-w-4xl bg-white p-6 rounded-3xl shadow-lg mb-6 animate-fade-in">
-           <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold text-pastel-slate">Session Settings</h2>
-              <button onClick={() => setShowSettings(false)}><X className="w-5 h-5" /></button>
+        <div className="w-full max-w-2xl bg-white p-6 rounded-3xl shadow-xl shadow-pastel-slate/5 border border-gray-100 mb-8 animate-fade-in relative z-20">
+           <div className="flex justify-between items-center mb-6 border-b border-gray-50 pb-4">
+              <h2 className="text-lg font-bold text-pastel-charcoal flex items-center gap-2">
+                <Settings2 className="w-5 h-5" /> Configuration
+              </h2>
+              <button onClick={() => setShowSettings(false)} className="p-1 hover:bg-gray-100 rounded-full"><X className="w-5 h-5 text-gray-400" /></button>
            </div>
            
-           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+           <div className="space-y-6">
               <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Video Dimension</label>
-                  <div className="flex gap-2 flex-wrap">
+                  <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Aspect Ratio</label>
+                  <div className="grid grid-cols-4 gap-3">
                       {Object.values(AspectRatio).map((ratio) => (
                           <button
                             key={ratio}
                             onClick={() => setAspectRatio(ratio)}
-                            className={`px-4 py-2 rounded-xl border ${aspectRatio === ratio ? 'bg-pastel-slate text-white' : 'bg-gray-50 border-gray-200'}`}
+                            className={`py-2 px-3 rounded-xl text-sm font-medium transition-all ${aspectRatio === ratio ? 'bg-pastel-slate text-white shadow-md' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}
                           >
                             {ratio}
                           </button>
                       ))}
                   </div>
-                  <p className="text-xs text-gray-400 mt-2">Note: Actual video file dimension depends on camera capabilities.</p>
               </div>
 
               <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Upload Questions (JSON/TXT)</label>
-                  <label className="flex items-center justify-center w-full h-12 px-4 transition bg-white border-2 border-gray-300 border-dashed rounded-xl appearance-none cursor-pointer hover:border-pastel-slate focus:outline-none">
-                      <span className="flex items-center space-x-2">
-                          <Upload className="w-4 h-4 text-gray-600" />
-                          <span className="font-medium text-gray-600">Click to upload</span>
-                      </span>
-                      <input type="file" name="file_upload" className="hidden" accept=".json,.txt" onChange={handleFileUpload} />
-                  </label>
+                  <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Questions Source</label>
+                  <div className="relative">
+                      <input type="file" id="q-upload" className="hidden" accept=".json,.txt" onChange={handleFileUpload} />
+                      <label htmlFor="q-upload" className="flex items-center justify-center w-full p-4 border-2 border-dashed border-gray-200 rounded-2xl cursor-pointer hover:border-pastel-slate hover:bg-gray-50 transition-colors group">
+                          <Upload className="w-5 h-5 text-gray-400 mr-2 group-hover:text-pastel-slate" />
+                          <span className="text-sm text-gray-500 font-medium group-hover:text-pastel-slate">Upload Questions JSON/TXT</span>
+                      </label>
+                  </div>
               </div>
            </div>
         </div>
       )}
 
-      {/* Main Recording Area */}
-      <div className="relative w-full max-w-6xl flex flex-col md:flex-row gap-6 items-start justify-center">
+      {/* Main Content Grid */}
+      <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         
-        {/* Video Viewport */}
-        <div className={`relative w-full md:w-auto mx-auto shadow-2xl rounded-3xl overflow-hidden bg-black transition-all duration-300 ${getAspectRatioClass()} max-h-[80vh]`}>
-           <video 
-             ref={videoRef} 
-             autoPlay 
-             playsInline 
-             muted 
-             className="w-full h-full object-cover transform scale-x-[-1]" // Mirror effect
-           />
-           
-           {/* Overlay Interface */}
-           <div className="absolute inset-0 flex flex-col justify-between p-6 bg-gradient-to-b from-black/30 via-transparent to-black/60 pointer-events-none">
-              
-              {/* Top: Current Question */}
-              <div className="bg-white/90 backdrop-blur-md p-6 rounded-2xl shadow-sm border border-white/50 animate-slide-down pointer-events-auto">
-                 <div className="text-xs font-bold text-pastel-slate uppercase tracking-wider mb-2">
-                    Question {currentQuestionIndex + 1} of {questions.length}
-                 </div>
-                 <h2 className="text-xl md:text-2xl font-serif text-gray-800 leading-snug">
-                    {questions[currentQuestionIndex]?.text}
-                 </h2>
-              </div>
+        {/* Left Column: Video Preview */}
+        <div className="lg:col-span-7 xl:col-span-8 flex flex-col items-center">
+            <div className={`relative w-full shadow-2xl shadow-pastel-slate/20 rounded-[2rem] overflow-hidden bg-gray-900 border-4 border-white ${getAspectRatioClass()} transition-all duration-500`}>
+               <video 
+                 ref={videoRef} 
+                 autoPlay 
+                 playsInline 
+                 muted 
+                 className="w-full h-full object-cover transform scale-x-[-1]" 
+               />
+               
+               {/* Video Overlay Layer */}
+               <div className="absolute inset-0 flex flex-col p-6 lg:p-8 pointer-events-none">
+                  {/* Top: Status Indicators */}
+                  <div className="flex justify-between items-start">
+                     <div className="flex flex-col gap-2">
+                         {isRecording && (
+                            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full backdrop-blur-md border border-white/10 ${isPaused ? 'bg-amber-500/80' : 'bg-red-500/80'} text-white shadow-lg transition-all`}>
+                                <div className={`w-2 h-2 rounded-full ${isPaused ? 'bg-amber-200' : 'bg-white animate-pulse'}`} />
+                                <span className="text-xs font-bold tracking-wider mr-1">{isPaused ? 'PAUSED' : 'REC'}</span>
+                                <span className="text-xs font-mono font-medium border-l border-white/20 pl-2">{formatDuration(duration)}</span>
+                            </div>
+                         )}
+                         {!isRecording && <div className="self-start px-3 py-1.5 bg-black/40 backdrop-blur-md rounded-full text-white/80 text-xs font-bold border border-white/10">PREVIEW</div>}
+                     </div>
 
-              {/* Middle: AI Interjections (Host Overlay) */}
-              <div className="flex-1 flex items-center justify-center">
-                 {hostInterjection && !isPaused && (
-                    <div className="bg-pastel-pink/90 backdrop-blur-md px-6 py-4 rounded-xl shadow-lg transform transition-all duration-500 animate-bounce-gentle border border-white/40 max-w-[80%]">
-                        <p className="text-lg font-medium text-gray-900 italic text-center">
-                           "{hostInterjection}"
-                        </p>
-                    </div>
-                 )}
-                 {isPaused && (
-                    <div className="bg-black/50 backdrop-blur-md px-8 py-6 rounded-2xl shadow-2xl border border-white/20 animate-pulse">
-                        <Pause className="w-12 h-12 text-white mx-auto mb-2" />
-                        <p className="text-white font-bold tracking-widest text-center">PAUSED</p>
-                    </div>
-                 )}
-              </div>
-
-              {/* Bottom: Status & Transcript Preview (Debug/Feedback) */}
-              <div className="flex justify-between items-end">
-                  <div className="flex flex-col gap-2">
-                      <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold w-fit ${isRecording ? (isPaused ? 'bg-amber-500 text-white' : 'bg-red-500 text-white animate-pulse') : 'bg-gray-800/50 text-white'}`}>
-                          <div className={`w-2 h-2 rounded-full ${isRecording ? 'bg-white' : 'bg-gray-400'}`}></div>
-                          {isRecording ? (isPaused ? 'PAUSED' : 'REC') : 'STANDBY'}
-                      </div>
-                      <div className="flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold w-fit bg-blue-500/80 text-white backdrop-blur-sm">
-                          AI STATUS: {liveStatus.toUpperCase()}
-                      </div>
+                     <div className="flex flex-col items-end gap-2">
+                         <div className={`px-3 py-1.5 rounded-full backdrop-blur-md border border-white/10 text-xs font-bold transition-colors ${liveStatus === 'connected' ? 'bg-emerald-500/80 text-white' : 'bg-gray-800/60 text-gray-300'}`}>
+                            {liveStatus === 'connected' ? 'AI CONNECTED' : 'AI OFFLINE'}
+                         </div>
+                         {/* Audio Visualizer */}
+                         <div className="h-8 flex items-end gap-0.5 p-1.5 bg-black/20 backdrop-blur-sm rounded-lg border border-white/5">
+                             {[...Array(5)].map((_, i) => (
+                                 <div 
+                                    key={i} 
+                                    className="w-1.5 bg-white/90 rounded-full transition-all duration-75"
+                                    style={{ 
+                                        height: `${Math.max(4, Math.min(20, audioLevel * (0.5 + Math.random())))}px`,
+                                        opacity: audioLevel > 5 ? 1 : 0.3 
+                                    }} 
+                                 />
+                             ))}
+                         </div>
+                     </div>
                   </div>
-              </div>
-           </div>
+
+                  {/* Center: AI Host Messages */}
+                  <div className="flex-1 flex items-center justify-center p-4">
+                     {hostInterjection && !isPaused && (
+                        <div className="max-w-md bg-white/95 backdrop-blur-xl p-5 rounded-2xl shadow-2xl animate-slide-down transform border border-white/50">
+                            <div className="flex items-center gap-2 mb-2">
+                                <Sparkles className="w-3 h-3 text-pastel-slate" />
+                                <span className="text-[10px] font-bold text-pastel-slate uppercase tracking-wider">Interviewer</span>
+                            </div>
+                            <p className="text-lg font-medium text-gray-800 leading-snug text-center font-serif italic">
+                               "{hostInterjection}"
+                            </p>
+                        </div>
+                     )}
+                  </div>
+
+                  {/* Bottom: Question Card */}
+                  <div className="bg-gradient-to-t from-black/80 to-transparent -mx-6 -mb-6 lg:-mx-8 lg:-mb-8 p-6 lg:p-8 pt-20">
+                     <div className="bg-white/95 backdrop-blur-xl p-6 rounded-2xl shadow-lg border border-white/40 animate-slide-down">
+                         <div className="flex justify-between items-end mb-2">
+                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Question {currentQuestionIndex + 1} / {questions.length}</span>
+                         </div>
+                         <h2 className="text-xl md:text-2xl font-serif text-gray-900 leading-snug">
+                            {questions[currentQuestionIndex]?.text}
+                         </h2>
+                     </div>
+                  </div>
+               </div>
+            </div>
         </div>
 
-        {/* Controls Side Panel (Desktop) / Bottom Panel (Mobile) */}
-        <div className="w-full md:w-64 flex flex-col gap-4">
+        {/* Right Column: Controls & Transcript */}
+        <div className="lg:col-span-5 xl:col-span-4 flex flex-col gap-6 h-full min-h-[500px]">
            
-           {!isRecording ? (
-             <button 
-                onClick={startRecording}
-                disabled={!stream || !apiKey}
-                className="w-full py-4 bg-pastel-slate text-white rounded-2xl font-bold text-lg hover:bg-gray-700 transition-all shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-             >
-                <Camera className="w-6 h-6" />
-                Start Interview
-             </button>
-           ) : (
-             <>
-                <div className="flex gap-4">
-                    <button 
-                        onClick={togglePause}
-                        className={`flex-1 py-4 rounded-2xl font-bold text-lg transition-all shadow-md flex items-center justify-center gap-2 ${isPaused ? 'bg-blue-50 text-blue-600 border border-blue-100 hover:bg-blue-100' : 'bg-amber-50 text-amber-600 border border-amber-100 hover:bg-amber-100'}`}
-                    >
-                        {isPaused ? <Play className="w-5 h-5 fill-current" /> : <Pause className="w-5 h-5 fill-current" />}
-                        {isPaused ? "Resume" : "Pause"}
-                    </button>
-
-                    <button 
-                        onClick={stopRecording}
-                        className="flex-1 py-4 bg-red-50 text-red-600 border border-red-100 rounded-2xl font-bold text-lg hover:bg-red-100 transition-all shadow-md flex items-center justify-center gap-2"
-                    >
-                        <Square className="w-5 h-5 fill-current" />
-                        Stop
-                    </button>
-                </div>
-
-                <button 
-                  onClick={nextQuestion}
-                  className="w-full py-4 bg-pastel-mint text-emerald-800 border border-emerald-100 rounded-2xl font-bold text-lg hover:bg-emerald-100 transition-all shadow-md flex items-center justify-center gap-2"
-                >
-                  Next Question <ChevronRight className="w-5 h-5" />
-                </button>
-             </>
-           )}
-
-           {!apiKey && (
-             <div className="p-4 bg-red-50 text-red-700 text-sm rounded-xl border border-red-200">
-               ⚠️ API Key missing. Please check configuration.
-             </div>
-           )}
-
-           <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex-1 flex flex-col">
-              <div className="flex justify-between items-center mb-3">
-                 <h3 className="font-bold text-gray-400 text-xs uppercase">Live Transcript</h3>
+           {/* Control Panel */}
+           <div className="bg-white p-6 rounded-3xl shadow-xl shadow-pastel-slate/5 border border-gray-100 flex flex-col gap-4">
+               {!isRecording ? (
                  <button 
-                    onClick={() => downloadJSON()} 
-                    title="Download Transcript JSON"
-                    disabled={qaPairs.length === 0}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg text-[10px] font-bold uppercase tracking-wide transition-colors disabled:opacity-50"
+                    onClick={startRecording}
+                    disabled={!stream || !apiKey}
+                    className="w-full py-5 bg-pastel-slate text-white rounded-2xl font-bold text-lg hover:bg-pastel-charcoal transition-all shadow-lg shadow-pastel-slate/30 flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed group"
                  >
-                    <Download className="w-3 h-3" />
-                    JSON
-                 </button>
-              </div>
-              <div className="h-48 overflow-y-auto text-sm text-gray-600 leading-relaxed no-scrollbar p-2 bg-gray-50 rounded-xl flex-1 border border-gray-100 relative">
-                 {isPaused && (
-                    <div className="absolute inset-0 bg-white/60 flex items-center justify-center z-10 backdrop-blur-[1px]">
-                        <span className="text-xs font-bold text-amber-500 bg-amber-50 px-2 py-1 rounded border border-amber-100">Recording Paused</span>
+                    <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center group-hover:bg-white/30 transition-colors">
+                        <Camera className="w-4 h-4 fill-current" />
                     </div>
-                 )}
-                 {currentTranscript || <span className="text-gray-400 italic">Listening...</span>}
-              </div>
+                    Start Recording
+                 </button>
+               ) : (
+                 <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                        <button 
+                            onClick={togglePause}
+                            className={`py-4 rounded-2xl font-bold text-base transition-all flex flex-col items-center justify-center gap-2 ${isPaused ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+                        >
+                            {isPaused ? <Play className="w-6 h-6 fill-current" /> : <Pause className="w-6 h-6 fill-current" />}
+                            {isPaused ? "Resume" : "Pause"}
+                        </button>
+
+                        <button 
+                            onClick={stopRecording}
+                            className="py-4 bg-red-50 text-red-600 rounded-2xl font-bold text-base hover:bg-red-100 transition-all flex flex-col items-center justify-center gap-2"
+                        >
+                            <Square className="w-6 h-6 fill-current" />
+                            Stop
+                        </button>
+                    </div>
+
+                    <button 
+                      onClick={nextQuestion}
+                      className="w-full py-4 bg-pastel-mint text-emerald-800 border border-emerald-100 rounded-2xl font-bold text-lg hover:bg-emerald-100 transition-all shadow-sm flex items-center justify-center gap-2 group"
+                    >
+                      Next Question 
+                      <div className="bg-white/40 p-1 rounded-full group-hover:translate-x-1 transition-transform">
+                          <ChevronRight className="w-4 h-4" />
+                      </div>
+                    </button>
+                 </div>
+               )}
+
+               {!apiKey && (
+                 <div className="p-3 bg-red-50 text-red-600 text-xs font-medium rounded-xl border border-red-100 flex items-center gap-2">
+                   <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                   API Key Missing.
+                 </div>
+               )}
+           </div>
+
+           {/* Transcript View */}
+           <div className="flex-1 bg-white rounded-3xl shadow-xl shadow-pastel-slate/5 border border-gray-100 overflow-hidden flex flex-col h-[400px]">
+               <div className="p-5 border-b border-gray-50 flex justify-between items-center bg-gray-50/50">
+                   <div className="flex items-center gap-2">
+                       <FileText className="w-4 h-4 text-pastel-slate" />
+                       <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider">Live Transcript</h3>
+                   </div>
+                   <button 
+                        onClick={() => downloadJSON()} 
+                        disabled={qaPairs.length === 0}
+                        className="text-gray-400 hover:text-pastel-slate transition-colors disabled:opacity-30"
+                   >
+                       <Download className="w-4 h-4" />
+                   </button>
+               </div>
+               
+               <div className="flex-1 p-5 overflow-y-auto custom-scrollbar">
+                   {currentTranscript ? (
+                       <div className="flex flex-col gap-2">
+                          <p className="text-gray-600 leading-relaxed text-sm font-medium animate-fade-in">
+                              {currentTranscript}
+                          </p>
+                          <div ref={transcriptEndRef} />
+                       </div>
+                   ) : (
+                       <div className="h-full flex flex-col items-center justify-center text-gray-300 gap-2">
+                           <Mic className="w-8 h-8 opacity-20" />
+                           <p className="text-xs">Waiting for speech...</p>
+                       </div>
+                   )}
+               </div>
            </div>
         </div>
       </div>
