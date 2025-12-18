@@ -2,10 +2,9 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { AspectRatio, Question, QAPair } from '../types';
 import { useLiveSession } from '../hooks/useLiveSession';
 import { DEFAULT_QUESTIONS, parseQuestionsFile } from '../services/questionService';
-import { Download, Upload, Settings2, Camera, Mic, Square, Play, Pause, ChevronRight, X, Video, FileText, Sparkles } from 'lucide-react';
+import { Download, Upload, Settings2, Camera, Mic, Square, Play, Pause, ChevronRight, X, FileText, Sparkles } from 'lucide-react';
 
 const Recorder: React.FC = () => {
-  // Access environment variable dynamically
   const apiKey = process.env.API_KEY;
 
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -27,20 +26,13 @@ const Recorder: React.FC = () => {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
 
-  // System instruction for Gemini
   const currentQuestionText = questions[currentQuestionIndex]?.text || "";
   const systemInstruction = `
     You are a gentle, empathetic digital biographer and podcast host. 
     Your goal is to help the user build a digital twin of themselves by recording their memories.
-    
     The user is currently answering this question: "${currentQuestionText}".
-    
-    Listen carefully. If the user stops talking for a while, gets stuck, or gives a very short answer, 
-    gently interject with a short, text-based follow-up question to encourage them. 
-    
-    Do NOT ask a new main question. Just dig deeper into the current topic.
-    Keep your interjections concise (under 15 words) as they will be displayed as overlay text.
-    Do not be pushy. Be classy and supportive.
+    Listen carefully. If the user stops talking for a while, interject with a short, text-based follow-up question. 
+    Keep your interjections concise (under 15 words). Be classy and supportive.
   `;
 
   const { 
@@ -54,7 +46,6 @@ const Recorder: React.FC = () => {
     resetTranscript
   } = useLiveSession({ apiKey: apiKey, systemInstruction });
 
-  // Initialize Camera with fallback strategy
   const initCamera = useCallback(async () => {
     if (stream) {
       stream.getTracks().forEach(track => track.stop());
@@ -95,11 +86,9 @@ const Recorder: React.FC = () => {
     }
   }, [aspectRatio]);
 
-  // Audio Visualization setup
   useEffect(() => {
     if (!stream) return;
 
-    // Create a separate audio context for visualization to not interfere with recording/live API
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
     audioContextRef.current = audioContext;
     const source = audioContext.createMediaStreamSource(stream);
@@ -113,10 +102,8 @@ const Recorder: React.FC = () => {
     let lastUpdate = 0;
 
     const updateAudioLevel = (time: number) => {
-      // Throttle updates to ~20fps to improve React performance
       if (time - lastUpdate > 50) {
         analyser.getByteFrequencyData(dataArray);
-        // Calculate average volume
         const average = dataArray.reduce((acc, val) => acc + val, 0) / bufferLength;
         setAudioLevel(average);
         lastUpdate = time;
@@ -147,7 +134,6 @@ const Recorder: React.FC = () => {
     }
   }, [aspectRatio, isRecording, initCamera]);
 
-  // Timer logic
   useEffect(() => {
     let interval: ReturnType<typeof setInterval>;
     if (isRecording && !isPaused) {
@@ -158,7 +144,6 @@ const Recorder: React.FC = () => {
     return () => clearInterval(interval);
   }, [isRecording, isPaused]);
 
-  // Auto-scroll transcript
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [currentTranscript]);
@@ -287,9 +272,26 @@ const Recorder: React.FC = () => {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const getStatusColor = () => {
+    switch (liveStatus) {
+      case 'connected': return 'bg-emerald-500/80 text-white';
+      case 'connecting': return 'bg-amber-500/80 text-white animate-pulse';
+      case 'error': return 'bg-red-500/80 text-white';
+      default: return 'bg-gray-800/60 text-gray-300';
+    }
+  };
+
+  const getStatusText = () => {
+    switch (liveStatus) {
+      case 'connected': return 'AI CONNECTED';
+      case 'connecting': return 'CONNECTING...';
+      case 'error': return 'AI ERROR';
+      default: return 'AI READY';
+    }
+  };
+
   return (
     <div className="min-h-screen flex flex-col items-center p-4 lg:p-8 font-sans bg-pastel-cream text-pastel-slate">
-      {/* Header */}
       <header className="w-full max-w-6xl flex justify-between items-center mb-6 lg:mb-10">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-pastel-slate text-white rounded-xl flex items-center justify-center shadow-lg shadow-pastel-slate/20">
@@ -300,7 +302,6 @@ const Recorder: React.FC = () => {
              <p className="text-xs text-gray-500 font-medium tracking-wide uppercase">Digital Twin Recorder</p>
           </div>
         </div>
-        
         <button 
             onClick={() => setShowSettings(!showSettings)}
             className="group flex items-center gap-2 px-4 py-2 bg-white border border-gray-100 rounded-full shadow-sm hover:shadow-md hover:border-pastel-slate/30 transition-all"
@@ -310,7 +311,6 @@ const Recorder: React.FC = () => {
         </button>
       </header>
 
-      {/* Settings Panel */}
       {showSettings && (
         <div className="w-full max-w-2xl bg-white p-6 rounded-3xl shadow-xl shadow-pastel-slate/5 border border-gray-100 mb-8 animate-fade-in relative z-20">
            <div className="flex justify-between items-center mb-6 border-b border-gray-50 pb-4">
@@ -319,7 +319,6 @@ const Recorder: React.FC = () => {
               </h2>
               <button onClick={() => setShowSettings(false)} className="p-1 hover:bg-gray-100 rounded-full"><X className="w-5 h-5 text-gray-400" /></button>
            </div>
-           
            <div className="space-y-6">
               <div>
                   <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Aspect Ratio</label>
@@ -335,7 +334,6 @@ const Recorder: React.FC = () => {
                       ))}
                   </div>
               </div>
-
               <div>
                   <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Questions Source</label>
                   <div className="relative">
@@ -350,23 +348,11 @@ const Recorder: React.FC = () => {
         </div>
       )}
 
-      {/* Main Content Grid */}
       <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-        
-        {/* Left Column: Video Preview */}
         <div className="lg:col-span-7 xl:col-span-8 flex flex-col items-center">
             <div className={`relative w-full shadow-2xl shadow-pastel-slate/20 rounded-[2rem] overflow-hidden bg-gray-900 border-4 border-white ${getAspectRatioClass()} transition-all duration-500`}>
-               <video 
-                 ref={videoRef} 
-                 autoPlay 
-                 playsInline 
-                 muted 
-                 className="w-full h-full object-cover transform scale-x-[-1]" 
-               />
-               
-               {/* Video Overlay Layer */}
+               <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
                <div className="absolute inset-0 flex flex-col p-6 lg:p-8 pointer-events-none">
-                  {/* Top: Status Indicators */}
                   <div className="flex justify-between items-start">
                      <div className="flex flex-col gap-2">
                          {isRecording && (
@@ -378,12 +364,10 @@ const Recorder: React.FC = () => {
                          )}
                          {!isRecording && <div className="self-start px-3 py-1.5 bg-black/40 backdrop-blur-md rounded-full text-white/80 text-xs font-bold border border-white/10">PREVIEW</div>}
                      </div>
-
                      <div className="flex flex-col items-end gap-2">
-                         <div className={`px-3 py-1.5 rounded-full backdrop-blur-md border border-white/10 text-xs font-bold transition-colors ${liveStatus === 'connected' ? 'bg-emerald-500/80 text-white' : 'bg-gray-800/60 text-gray-300'}`}>
-                            {liveStatus === 'connected' ? 'AI CONNECTED' : 'AI OFFLINE'}
+                         <div className={`px-3 py-1.5 rounded-full backdrop-blur-md border border-white/10 text-xs font-bold transition-all duration-300 ${getStatusColor()}`}>
+                            {getStatusText()}
                          </div>
-                         {/* Audio Visualizer */}
                          <div className="h-8 flex items-end gap-0.5 p-1.5 bg-black/20 backdrop-blur-sm rounded-lg border border-white/5">
                              {[...Array(5)].map((_, i) => (
                                  <div 
@@ -398,8 +382,6 @@ const Recorder: React.FC = () => {
                          </div>
                      </div>
                   </div>
-
-                  {/* Center: AI Host Messages */}
                   <div className="flex-1 flex items-center justify-center p-4">
                      {hostInterjection && !isPaused && (
                         <div className="max-w-md bg-white/95 backdrop-blur-xl p-5 rounded-2xl shadow-2xl animate-slide-down transform border border-white/50">
@@ -413,8 +395,6 @@ const Recorder: React.FC = () => {
                         </div>
                      )}
                   </div>
-
-                  {/* Bottom: Question Card */}
                   <div className="bg-gradient-to-t from-black/80 to-transparent -mx-6 -mb-6 lg:-mx-8 lg:-mb-8 p-6 lg:p-8 pt-20">
                      <div className="bg-white/95 backdrop-blur-xl p-6 rounded-2xl shadow-lg border border-white/40 animate-slide-down">
                          <div className="flex justify-between items-end mb-2">
@@ -428,11 +408,7 @@ const Recorder: React.FC = () => {
                </div>
             </div>
         </div>
-
-        {/* Right Column: Controls & Transcript */}
         <div className="lg:col-span-5 xl:col-span-4 flex flex-col gap-6 h-full min-h-[500px]">
-           
-           {/* Control Panel */}
            <div className="bg-white p-6 rounded-3xl shadow-xl shadow-pastel-slate/5 border border-gray-100 flex flex-col gap-4">
                {!isRecording ? (
                  <button 
@@ -455,7 +431,6 @@ const Recorder: React.FC = () => {
                             {isPaused ? <Play className="w-6 h-6 fill-current" /> : <Pause className="w-6 h-6 fill-current" />}
                             {isPaused ? "Resume" : "Pause"}
                         </button>
-
                         <button 
                             onClick={stopRecording}
                             className="py-4 bg-red-50 text-red-600 rounded-2xl font-bold text-base hover:bg-red-100 transition-all flex flex-col items-center justify-center gap-2"
@@ -464,7 +439,6 @@ const Recorder: React.FC = () => {
                             Stop
                         </button>
                     </div>
-
                     <button 
                       onClick={nextQuestion}
                       className="w-full py-4 bg-pastel-mint text-emerald-800 border border-emerald-100 rounded-2xl font-bold text-lg hover:bg-emerald-100 transition-all shadow-sm flex items-center justify-center gap-2 group"
@@ -476,7 +450,6 @@ const Recorder: React.FC = () => {
                     </button>
                  </div>
                )}
-
                {!apiKey && (
                  <div className="p-3 bg-red-50 text-red-600 text-xs font-medium rounded-xl border border-red-100 flex items-center gap-2">
                    <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
@@ -484,23 +457,16 @@ const Recorder: React.FC = () => {
                  </div>
                )}
            </div>
-
-           {/* Transcript View */}
            <div className="flex-1 bg-white rounded-3xl shadow-xl shadow-pastel-slate/5 border border-gray-100 overflow-hidden flex flex-col h-[400px]">
                <div className="p-5 border-b border-gray-50 flex justify-between items-center bg-gray-50/50">
                    <div className="flex items-center gap-2">
                        <FileText className="w-4 h-4 text-pastel-slate" />
                        <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider">Live Transcript</h3>
                    </div>
-                   <button 
-                        onClick={() => downloadJSON()} 
-                        disabled={qaPairs.length === 0}
-                        className="text-gray-400 hover:text-pastel-slate transition-colors disabled:opacity-30"
-                   >
+                   <button onClick={() => downloadJSON()} disabled={qaPairs.length === 0} className="text-gray-400 hover:text-pastel-slate transition-colors disabled:opacity-30">
                        <Download className="w-4 h-4" />
                    </button>
                </div>
-               
                <div className="flex-1 p-5 overflow-y-auto custom-scrollbar">
                    {currentTranscript ? (
                        <div className="flex flex-col gap-2">

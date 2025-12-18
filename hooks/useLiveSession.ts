@@ -13,60 +13,52 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
   const [hostInterjection, setHostInterjection] = useState<string>('');
   const [currentTranscript, setCurrentTranscript] = useState<string>('');
   
-  // Refs for audio processing
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const sessionPromiseRef = useRef<Promise<any> | null>(null);
-  const currentTranscriptRef = useRef<string>(''); // Mutable ref to hold transcript between renders
-  
-  // Ref for pausing data transmission without closing session
+  const currentTranscriptRef = useRef<string>(''); 
   const isLivePausedRef = useRef(false);
 
   const connect = useCallback(async (stream: MediaStream) => {
     if (!apiKey) {
       console.error("No API Key provided");
+      setStatus('error');
       return;
     }
 
     setStatus('connecting');
     mediaStreamRef.current = stream;
-    isLivePausedRef.current = false; // Reset pause state on new connection
+    isLivePausedRef.current = false;
 
     try {
       const ai = new GoogleGenAI({ apiKey });
       
-      // Initialize Audio Context for input processing
-      // Note: Browser might ignore sampleRate request and use hardware rate (e.g. 48000)
       const ac = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       audioContextRef.current = ac;
 
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         config: {
-          responseModalities: [Modality.AUDIO], // Required by API
+          responseModalities: [Modality.AUDIO],
           systemInstruction: systemInstruction,
-          inputAudioTranscription: { model: "gemini-2.5-flash-native-audio-preview-09-2025" },
-          outputAudioTranscription: { model: "gemini-2.5-flash-native-audio-preview-09-2025" },
+          // Use empty objects as per GenAI SDK requirements for audio transcription
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
         },
         callbacks: {
           onopen: () => {
             setStatus('connected');
             console.log('Gemini Live Session Opened');
 
-            // Setup Audio Processing Pipeline
             const source = ac.createMediaStreamSource(stream);
-            // 4096 buffer size, 1 input channel, 1 output channel
             const processor = ac.createScriptProcessor(4096, 1, 1);
 
             processor.onaudioprocess = (e) => {
-              // Check if paused before sending data
               if (isLivePausedRef.current) return;
 
               const inputData = e.inputBuffer.getChannelData(0);
-              
-              // Ensure we are sending 16kHz audio
               let pcmData;
               if (ac.sampleRate !== 16000) {
                  const resampled = downsampleBuffer(inputData, ac.sampleRate, 16000);
@@ -88,25 +80,21 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
             };
 
             source.connect(processor);
-            processor.connect(ac.destination); // Required for script processor to run
+            processor.connect(ac.destination);
 
             sourceRef.current = source;
             processorRef.current = processor;
           },
           onmessage: (msg: LiveServerMessage) => {
-            // Handle Model Output Transcription (The "Interjection")
             if (msg.serverContent?.outputTranscription) {
                const text = msg.serverContent.outputTranscription.text;
                if (text) {
-                 setHostInterjection(prev => {
-                    const newVal = prev + text;
-                    return newVal;
-                 });
+                 setHostInterjection(prev => prev + text);
+                 // Interjections fade out after a period
                  setTimeout(() => setHostInterjection(''), 8000); 
                }
             }
 
-            // Handle User Input Transcription (For the JSON record)
             if (msg.serverContent?.inputTranscription) {
                 const text = msg.serverContent.inputTranscription.text;
                 if (text) {
