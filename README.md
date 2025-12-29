@@ -2,7 +2,7 @@
 
 **Memoria** is an empathetic, AI-driven video biography application designed to capture life stories, wisdom, and personality. Powered by Google's Gemini Multimodal Live API, it acts as a patient, curious interviewer that helps users build a "Digital Twin" of themselves through guided conversation.
 
-A demo is at https://memo-one-alpha.vercel.app
+
 
 ## 🧠 For Families & Dementia Care
 
