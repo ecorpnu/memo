@@ -52,7 +52,8 @@ As memory begins to fade, anxiety often increases. "Reminiscence Therapy"—the 
 1.  **Clone the repository:**
     ```bash
     git clone https://github.com/ecorpnu/memo.git
-    cd memoria
+
+    cd memo
     ```
 
 2.  **Install dependencies:**
