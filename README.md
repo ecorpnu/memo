@@ -2,7 +2,7 @@
 
 **Memoria** is an empathetic, AI-driven video biography application designed to capture life stories, wisdom, and personality. Powered by Google's Gemini Multimodal Live API, it acts as a patient, curious interviewer that helps users build a "Digital Twin" of themselves through guided conversation.
 
-![App Screenshot](https://via.placeholder.com/800x450.png?text=Memoria+Preview)
+
 
 ## 🧠 For Families & Dementia Care
 
@@ -51,7 +51,7 @@ As memory begins to fade, anxiety often increases. "Reminiscence Therapy"—the 
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/your-username/memoria.git
+    git clone https://github.com/ecorpnu/memo.git
     cd memoria
     ```
 
