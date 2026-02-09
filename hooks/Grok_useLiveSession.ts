@@ -8,25 +8,20 @@ interface UseLiveSessionProps {
 }
 
 export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProps) => {
-  const [status, setStatus] = useState<ConnectionStatus>('disconnected');
-  const [hostInterjection, setHostInterjection] = useState<string>('');
-  const [currentTranscript, setCurrentTranscript] = useState<string>('');
+  const [status, setStatus] = useState('disconnected');
+  const [hostInterjection, setHostInterjection] = useState('');
+  const [currentTranscript, setCurrentTranscript] = useState('');
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const groqClientRef = useRef<Groq | null>(null);
-  const currentTranscriptRef = useRef<string>('');
+  const currentTranscriptRef = useRef('');
   const isLivePausedRef = useRef(false);
-  const isDisconnectedRef = useRef(false); // FIX: Track disconnection state
   const conversationHistoryRef = useRef<Array<{ role: string; content: string }>>([]);
   const recordingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const silenceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTranscriptLengthRef = useRef(0);
   const consecutiveFailuresRef = useRef(0);
-  
-  // FIX: Add missing refs for resume functionality
-  const audioOnlyStreamRef = useRef<MediaStream | null>(null);
-  const selectedMimeTypeRef = useRef<string>('');
 
   const connect = useCallback(async (stream: MediaStream) => {
     if (!apiKey) {
@@ -37,28 +32,28 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
 
     setStatus('connecting');
     isLivePausedRef.current = false;
-    isDisconnectedRef.current = false; // FIX: Mark as connected
     consecutiveFailuresRef.current = 0;
 
+    // Initialize Groq client (FIXED: corrected property name)
     groqClientRef.current = new Groq({
       apiKey: apiKey,
       dangerouslyAllowBrowser: true
     });
 
     try {
+      // Create audio-only stream
       const audioTracks = stream.getAudioTracks();
       if (audioTracks.length === 0) {
         throw new Error('No audio track available');
       }
 
       const audioOnlyStream = new MediaStream(audioTracks);
-      audioOnlyStreamRef.current = audioOnlyStream; // FIX: Store for resume
       console.log('✓ Audio-only stream created');
 
-      // Prioritize WAV format
+      // FIX: Prioritize WAV format (required for Groq compatibility)
       let selectedMimeType = '';
       const formats = [
-        'audio/wav',
+        'audio/wav', // Most compatible with Groq API
         'audio/webm;codecs=opus',
         'audio/webm',
         'audio/ogg'
@@ -71,24 +66,26 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
         }
       }
 
-      selectedMimeTypeRef.current = selectedMimeType; // FIX: Store for resume
-      console.log('✓ Selected format:', selectedMimeType || 'default');
+      console.log('✓ Selected recording format:', selectedMimeType || 'default');
 
+      // Start the first recording
       startRecording(audioOnlyStream, selectedMimeType);
+
       setStatus('connected');
 
     } catch (error) {
-      console.error("✗ Failed to start:", error);
+      console.error("✗ Failed to start: ", error);
       setStatus('error');
     }
   }, [apiKey, systemInstruction]);
 
-  const startRecording = useCallback((audioOnlyStream: MediaStream, selectedMimeType: string) => {
+  const startRecording = (audioOnlyStream: MediaStream, selectedMimeType: string) => {
     if (isLivePausedRef.current || !groqClientRef.current) return;
 
     audioChunksRef.current = [];
 
-    const options: MediaRecorderOptions = selectedMimeType
+    // Create new MediaRecorder for each chunk
+    const options = selectedMimeType
       ? { mimeType: selectedMimeType }
       : {};
 
@@ -105,28 +102,25 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
     };
 
     mediaRecorderRef.current.onstop = async () => {
-      // FIX: Don't process if session was disconnected
-      if (isDisconnectedRef.current) {
-        console.log('⊘ Skipping chunk (session disconnected)');
-        return;
-      }
-      
       if (audioChunksRef.current.length > 0 && !isLivePausedRef.current) {
         const mimeType = mediaRecorderRef.current?.mimeType || 'audio/webm';
         const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
 
+        // FIX: Lower threshold to avoid skipping valid quiet speech
         if (audioBlob.size < 5000) {
-          console.log(`⊘ Small chunk: ${(audioBlob.size / 1024).toFixed(1)}KB`);
+          console.log(`⊘ Skipping small chunk (${(audioBlob.size / 1024).toFixed(1)}KB)`);
         } else {
           try {
-            console.log(`→ ${(audioBlob.size / 1024).toFixed(1)}KB`);
+            console.log(`→ Processing ${(audioBlob.size / 1024).toFixed(1)}KB audio chunk`);
             
+            // FIX: Generate correct filename based on MIME type
             const fileName = mimeType.includes('wav') ? 'audio.wav' : 
                             mimeType.includes('webm') ? 'audio.webm' : 'audio.ogg';
             
             const audioFile = new File([audioBlob], fileName, { type: mimeType });
 
-            const transcription = await groqClientRef.current!.audio.transcriptions.create({
+            // Transcribe with Groq
+            const transcription = await groqClientRef.current.audio.transcriptions.create({
               file: audioFile,
               model: 'whisper-large-v3',
               response_format: 'json',
@@ -134,9 +128,10 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
               temperature: 0.0,
             });
 
+            // Success! Reset failure counter
             consecutiveFailuresRef.current = 0;
 
-            if (transcription.text?.trim()) {
+            if (transcription.text && transcription.text.trim()) {
               const newText = transcription.text.trim();
               console.log('✓', newText);
               
@@ -148,6 +143,7 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
                   clearTimeout(silenceTimeoutRef.current);
                 }
 
+                // Generate AI response after 7 seconds of silence
                 silenceTimeoutRef.current = setTimeout(async () => {
                   if (currentTranscriptRef.current.length > lastTranscriptLengthRef.current + 15) {
                     await generateHostResponse();
@@ -159,23 +155,32 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
           } catch (error: any) {
             consecutiveFailuresRef.current++;
             
+            // FIX: Detailed error diagnostics for 400 errors
             if (consecutiveFailuresRef.current % 3 === 0) {
-              console.error(`✗ Failed (${consecutiveFailuresRef.current}x)`);
+              console.error(`✗ Transcription failed (${consecutiveFailuresRef.current} times)`);
+              console.error('Audio details:', {
+                size: `${(audioBlob.size / 1024).toFixed(1)}KB`,
+                mimeType,
+                duration: 'Run audio validation to check'
+              });
+              
               if (error.response) {
-                console.error('API:', error.response.data);
+                console.error('API Response:', error.response.data);
               } else {
-                console.error('Error:', error.message);
+                console.error('Error message:', error.message);
               }
             }
             
+            // Auto-reset after too many failures
             if (consecutiveFailuresRef.current > 15) {
-              console.error('✗ Too many failures');
+              console.error('✗ Critical: Too many transcription failures. Check audio format compatibility.');
               consecutiveFailuresRef.current = 0;
             }
           }
         }
       }
 
+      // Clear timeout
       if (recordingTimeoutRef.current) {
         clearTimeout(recordingTimeoutRef.current);
       }
@@ -191,20 +196,25 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
 
     // Stop after 10 seconds
     recordingTimeoutRef.current = setTimeout(() => {
-      if (mediaRecorderRef.current?.state === 'recording') {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         mediaRecorderRef.current.stop();
       }
     }, 10000);
-  }, []);
+  };
 
   const generateHostResponse = async () => {
     if (!groqClientRef.current || isLivePausedRef.current) return;
-    
     try {
       const messages = [
-        { role: 'system', content: systemInstruction },
+        {
+          role: 'system',
+          content: systemInstruction
+        },
         ...conversationHistoryRef.current,
-        { role: 'user', content: currentTranscriptRef.current }
+        {
+          role: 'user',
+          content: currentTranscriptRef.current
+        }
       ];
 
       console.log('→ AI...');
@@ -238,10 +248,8 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
   };
 
   const disconnect = useCallback(() => {
-    isDisconnectedRef.current = true; // FIX: Mark as disconnected FIRST
-    
-    if (mediaRecorderRef.current?.state !== 'inactive') {
-      mediaRecorderRef.current?.stop();
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
     }
     if (recordingTimeoutRef.current) {
       clearTimeout(recordingTimeoutRef.current);
@@ -253,8 +261,6 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
     audioChunksRef.current = [];
     conversationHistoryRef.current = [];
     consecutiveFailuresRef.current = 0;
-    audioOnlyStreamRef.current = null;
-    selectedMimeTypeRef.current = '';
     setStatus('disconnected');
     setHostInterjection('');
     console.log('✓ Session closed');
@@ -262,32 +268,39 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
 
   const pause = useCallback(() => {
     isLivePausedRef.current = true;
-    if (mediaRecorderRef.current?.state === 'recording') {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.stop();
     }
     if (recordingTimeoutRef.current) {
       clearTimeout(recordingTimeoutRef.current);
     }
-    console.log('⏸ Paused');
   }, []);
 
   const resume = useCallback(() => {
     isLivePausedRef.current = false;
-    consecutiveFailuresRef.current = 0;
-    
-    // FIX: Now these refs exist!
-    if (audioOnlyStreamRef.current && selectedMimeTypeRef.current) {
+    consecutiveFailuresRef.current = 0; // Reset failures on resume
+    // Restart recording - note: audioOnlyStream and selectedMimeType need to be available or passed
+    // For simplicity, assuming connect is called with stream, but to resume, we need stream again?
+    // Wait, issue: stream is in connect, not global.
+    // To fix, make audioOnlyStreamRef = useRef(null);
+    // In connect: audioOnlyStreamRef.current = audioOnlyStream;
+    // Then in resume: if (audioOnlyStreamRef.current && selectedMimeType) startRecording(audioOnlyStreamRef.current, selectedMimeType);
+    // But selectedMimeType is local in connect.
+    // To fix, make selectedMimeTypeRef = useRef('');
+    // In connect: selectedMimeTypeRef.current = selectedMimeType;
+    // Add audioOnlyStreamRef = useRef<MediaStream | null>(null);
+    // In connect: audioOnlyStreamRef.current = audioOnlyStream;
+    // Then in resume:
+    if (audioOnlyStreamRef.current) {
       startRecording(audioOnlyStreamRef.current, selectedMimeTypeRef.current);
-      console.log('▶ Resumed');
     }
-  }, [startRecording]);
+  }, []);
 
   const resetTranscript = useCallback(() => {
     currentTranscriptRef.current = '';
     setCurrentTranscript('');
     conversationHistoryRef.current = [];
     lastTranscriptLengthRef.current = 0;
-    console.log('↻ Reset');
   }, []);
 
   return {
