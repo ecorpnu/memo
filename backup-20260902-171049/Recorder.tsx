@@ -4,11 +4,8 @@ import { useLiveSession } from '../hooks/useLiveSession';
 import { DEFAULT_QUESTIONS, parseQuestionsFile } from '../services/questionService';
 import { Download, Upload, Settings2, Camera, Mic, Square, Play, Pause, ChevronRight, X, FileText, Sparkles } from 'lucide-react';
 
-interface RecorderProps {
-  apiKey: string;
-}
-
-const Recorder: React.FC<RecorderProps> = ({ apiKey }) => {
+const Recorder: React.FC = () => {
+  const apiKey = process.env.API_KEY;
 
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>(AspectRatio.Portrait);

@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
-import { arrayBufferToBase64, downsampleBuffer, float32To16BitPCM } from '../utils/audio-utils';
+import Groq from 'groq-sdk';
 import { ConnectionStatus } from '../types';
 
 interface UseLiveSessionProps {
@@ -13,13 +12,15 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
   const [hostInterjection, setHostInterjection] = useState<string>('');
   const [currentTranscript, setCurrentTranscript] = useState<string>('');
   
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
-  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const sessionPromiseRef = useRef<Promise<any> | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const groqClientRef = useRef<Groq | null>(null);
   const currentTranscriptRef = useRef<string>(''); 
   const isLivePausedRef = useRef(false);
+  const conversationHistoryRef = useRef<Array<{role: string, content: string}>>([]);
+  const transcriptionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const silenceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTranscriptLengthRef = useRef(0);
 
   const connect = useCallback(async (stream: MediaStream) => {
     if (!apiKey) {
@@ -29,92 +30,74 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
     }
 
     setStatus('connecting');
-    mediaStreamRef.current = stream;
     isLivePausedRef.current = false;
+    
+    // Initialize Groq client
+    groqClientRef.current = new Groq({
+      apiKey: apiKey,
+      dangerouslyAllowBrowser: true // Note: In production, use a backend proxy
+    });
 
     try {
-      const ai = new GoogleGenAI({ apiKey });
-      
-      const ac = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-      audioContextRef.current = ac;
+      // Set up audio recording for transcription
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm',
+      });
 
-      const sessionPromise = ai.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
-        config: {
-          responseModalities: [Modality.AUDIO],
-          systemInstruction: systemInstruction,
-          // Use empty objects as per GenAI SDK requirements for audio transcription
-          inputAudioTranscription: {},
-          outputAudioTranscription: {},
-        },
-        callbacks: {
-          onopen: () => {
-            setStatus('connected');
-            console.log('Gemini Live Session Opened');
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
 
-            const source = ac.createMediaStreamSource(stream);
-            const processor = ac.createScriptProcessor(4096, 1, 1);
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0 && !isLivePausedRef.current) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
 
-            processor.onaudioprocess = (e) => {
-              if (isLivePausedRef.current) return;
+      // Start recording in 3-second chunks for transcription
+      mediaRecorder.start(3000);
+      setStatus('connected');
+      console.log('Groq Live Session Started');
 
-              const inputData = e.inputBuffer.getChannelData(0);
-              let pcmData;
-              if (ac.sampleRate !== 16000) {
-                 const resampled = downsampleBuffer(inputData, ac.sampleRate, 16000);
-                 pcmData = float32To16BitPCM(resampled);
-              } else {
-                 pcmData = float32To16BitPCM(inputData);
-              }
+      // Process audio chunks periodically for transcription
+      transcriptionIntervalRef.current = setInterval(async () => {
+        if (audioChunksRef.current.length > 0 && !isLivePausedRef.current && groqClientRef.current) {
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          audioChunksRef.current = [];
+
+          try {
+            // Convert blob to File for Groq API
+            const audioFile = new File([audioBlob], 'audio.webm', { type: 'audio/webm' });
+            
+            // Transcribe using Groq's Whisper
+            const transcription = await groqClientRef.current.audio.transcriptions.create({
+              file: audioFile,
+              model: 'whisper-large-v3-turbo',
+              response_format: 'json',
+              language: 'en',
+            });
+
+            if (transcription.text && transcription.text.trim()) {
+              currentTranscriptRef.current += ' ' + transcription.text;
+              setCurrentTranscript(currentTranscriptRef.current);
               
-              const base64Data = arrayBufferToBase64(pcmData);
+              // Reset silence timeout
+              if (silenceTimeoutRef.current) {
+                clearTimeout(silenceTimeoutRef.current);
+              }
 
-              sessionPromise.then(session => {
-                session.sendRealtimeInput({
-                  media: {
-                    mimeType: 'audio/pcm;rate=16000',
-                    data: base64Data
-                  }
-                });
-              });
-            };
-
-            source.connect(processor);
-            processor.connect(ac.destination);
-
-            sourceRef.current = source;
-            processorRef.current = processor;
-          },
-          onmessage: (msg: LiveServerMessage) => {
-            if (msg.serverContent?.outputTranscription) {
-               const text = msg.serverContent.outputTranscription.text;
-               if (text) {
-                 setHostInterjection(prev => prev + text);
-                 // Interjections fade out after a period
-                 setTimeout(() => setHostInterjection(''), 8000); 
-               }
-            }
-
-            if (msg.serverContent?.inputTranscription) {
-                const text = msg.serverContent.inputTranscription.text;
-                if (text) {
-                  currentTranscriptRef.current += text;
-                  setCurrentTranscript(currentTranscriptRef.current);
+              // Check for silence and trigger AI response
+              silenceTimeoutRef.current = setTimeout(async () => {
+                if (currentTranscriptRef.current.length > lastTranscriptLengthRef.current) {
+                  await generateHostResponse();
+                  lastTranscriptLengthRef.current = currentTranscriptRef.current.length;
                 }
+              }, 5000); // Wait 5 seconds of silence before generating response
             }
-          },
-          onclose: () => {
-            setStatus('disconnected');
-            console.log('Gemini Live Session Closed');
-          },
-          onerror: (err) => {
-            console.error('Gemini Live Error', err);
-            setStatus('error');
+          } catch (error) {
+            console.error('Transcription error:', error);
           }
         }
-      });
-      
-      sessionPromiseRef.current = sessionPromise;
+      }, 3000);
 
     } catch (error) {
       console.error("Failed to connect live session", error);
@@ -122,19 +105,73 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
     }
   }, [apiKey, systemInstruction]);
 
+  const generateHostResponse = async () => {
+    if (!groqClientRef.current || isLivePausedRef.current) return;
+
+    try {
+      // Build conversation context
+      const messages = [
+        {
+          role: 'system',
+          content: systemInstruction
+        },
+        ...conversationHistoryRef.current,
+        {
+          role: 'user',
+          content: currentTranscriptRef.current
+        }
+      ];
+
+      // Generate response using Groq
+      const completion = await groqClientRef.current.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: messages as any,
+        temperature: 0.7,
+        max_tokens: 150,
+      });
+
+      const response = completion.choices[0]?.message?.content;
+      
+      if (response) {
+        setHostInterjection(response);
+        
+        // Update conversation history
+        conversationHistoryRef.current.push(
+          { role: 'user', content: currentTranscriptRef.current },
+          { role: 'assistant', content: response }
+        );
+
+        // Keep conversation history manageable (last 10 exchanges)
+        if (conversationHistoryRef.current.length > 20) {
+          conversationHistoryRef.current = conversationHistoryRef.current.slice(-20);
+        }
+
+        // Clear interjection after 8 seconds
+        setTimeout(() => setHostInterjection(''), 8000);
+      }
+    } catch (error) {
+      console.error('Error generating host response:', error);
+    }
+  };
+
   const disconnect = useCallback(() => {
-    if (processorRef.current && sourceRef.current) {
-        processorRef.current.disconnect();
-        sourceRef.current.disconnect();
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
     }
-    if (audioContextRef.current) {
-        audioContextRef.current.close();
+    
+    if (transcriptionIntervalRef.current) {
+      clearInterval(transcriptionIntervalRef.current);
     }
-    if (sessionPromiseRef.current) {
-        sessionPromiseRef.current.then(session => session.close());
+    
+    if (silenceTimeoutRef.current) {
+      clearTimeout(silenceTimeoutRef.current);
     }
+
+    audioChunksRef.current = [];
+    conversationHistoryRef.current = [];
     setStatus('disconnected');
     setHostInterjection('');
+    console.log('Groq Live Session Closed');
   }, []);
 
   const pause = useCallback(() => {
@@ -148,6 +185,8 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
   const resetTranscript = useCallback(() => {
     currentTranscriptRef.current = '';
     setCurrentTranscript('');
+    conversationHistoryRef.current = [];
+    lastTranscriptLengthRef.current = 0;
   }, []);
 
   return {
