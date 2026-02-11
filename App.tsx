@@ -30,7 +30,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     // Check for API key in environment variable
-    const envKey = import.meta.env.VITE_GROQ_API_KEY;
+    const envKey = import.meta.env.VITE_API_KEY;
     if (envKey) {
       setApiKey(envKey);
       setIsReady(true);
