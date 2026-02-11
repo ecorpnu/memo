@@ -20,7 +20,7 @@ This version has been migrated from Google's Gemini AI Studio to Groq API. Here 
 
 3. **API Key Management**
    - Removed AI Studio specific code
-   - Uses environment variable `VITE_GROQ_API_KEY` or manual input
+   - Uses environment variable `VITE_API_KEY` or manual input
    - Set `dangerouslyAllowBrowser: true` for client-side API calls (see Security Note below)
 
 4. **Model Details**
@@ -41,7 +41,7 @@ This version has been migrated from Google's Gemini AI Studio to Groq API. Here 
 3. **Set Up Environment Variable**
    Create a `.env` file in the project root:
    ```env
-   VITE_GROQ_API_KEY=your_groq_api_key_here
+   VITE_API_KEY=your_groq_api_key_here
    ```
 
 4. **Run the Application**
