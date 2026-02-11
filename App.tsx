@@ -26,39 +26,25 @@ const GlobalStyles = () => (
 const App: React.FC = () => {
   const [isReady, setIsReady] = useState(false);
   const [needsKey, setNeedsKey] = useState(false);
+  const [apiKey, setApiKey] = useState('');
 
   useEffect(() => {
-    const checkApiKey = async () => {
-      // Check if running in AI Studio / IDX environment with key selector
-      const aistudio = (window as any).aistudio;
-      if (aistudio) {
-        const hasKey = await aistudio.hasSelectedApiKey();
-        if (hasKey) {
-          setIsReady(true);
-        } else {
-          setNeedsKey(true);
-        }
-      } else {
-        // Standard environment (e.g. Vercel) - assume process.env is set or handled elsewhere
-        setIsReady(true);
-      }
-    };
-    checkApiKey();
+    // Check for API key in environment variable
+    const envKey = import.meta.env.VITE_API_KEY;
+    if (envKey) {
+      setApiKey(envKey);
+      setIsReady(true);
+    } else {
+      setNeedsKey(true);
+    }
   }, []);
 
-  const handleStart = async () => {
-    const aistudio = (window as any).aistudio;
-    if (aistudio) {
-      try {
-        await aistudio.openSelectKey();
-        // Assuming success to handle race condition as per guidelines
-        setNeedsKey(false);
-        setIsReady(true);
-      } catch (e) {
-        console.error("Key selection failed", e);
-        // If it fails with "Requested entity was not found", we should prompt again
-        // But simply resetting state allows the user to try again.
-      }
+  const handleStart = () => {
+    const key = prompt('Please enter your Groq API Key:');
+    if (key && key.trim()) {
+      setApiKey(key.trim());
+      setNeedsKey(false);
+      setIsReady(true);
     }
   };
 
@@ -73,7 +59,7 @@ const App: React.FC = () => {
             </div>
             <h1 className="text-3xl font-serif text-pastel-slate font-bold mb-4">Memoria</h1>
             <p className="text-gray-600 mb-8 leading-relaxed">
-              Welcome to your digital biographer. To begin capturing your memories with Gemini, please select an API key.
+              Welcome to your digital biographer. To begin capturing your memories with Groq AI, please provide an API key.
             </p>
             
             <button 
@@ -84,10 +70,10 @@ const App: React.FC = () => {
             </button>
             
             <p className="mt-6 text-xs text-gray-400">
-              Note: This application uses Google's Gemini API. 
+              Note: This application uses Groq's AI API. 
               <br />
-              <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="underline hover:text-pastel-slate">
-                Billing information
+              <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer" className="underline hover:text-pastel-slate">
+                Get your API key at console.groq.com
               </a>
             </p>
           </div>
@@ -104,7 +90,7 @@ const App: React.FC = () => {
     <>
       <GlobalStyles />
       <div className="min-h-screen bg-pastel-cream text-slate-800">
-        <Recorder />
+        <Recorder apiKey={apiKey} />
       </div>
     </>
   );

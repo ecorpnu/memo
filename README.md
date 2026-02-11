@@ -1,99 +1,138 @@
-# Memoria: AI-Powered Digital Twin Recorder
+# Memoria - Digital Biographer (Groq Version)
 
-**Memoria** is an empathetic, AI-driven video biography application designed to capture life stories, wisdom, and personality. Powered by Google's Gemini Multimodal Live API, it acts as a patient, curious interviewer that helps users build a "Digital Twin" of themselves through guided conversation.
+A React application for recording and transcribing personal memories with AI-powered interviewer interjections, now powered by Groq AI.
 
-Here is a link to Youtube for a demo https://youtu.be/kKW5KPYvwmM
+## Migration from Google Gemini to Groq
 
-## 🧠 For Families & Dementia Care
+This version has been migrated from Google's Gemini AI Studio to Groq API. Here are the key changes:
 
-While Memoria is a powerful tool for anyone wishing to leave a legacy, it was designed with a specific mission: **supporting individuals facing early-stage dementia, Alzheimer's, or cognitive decline.**
+### Changes Made
 
-### The Philosophy: Reminiscence Therapy & Dignity
-As memory begins to fade, anxiety often increases. "Reminiscence Therapy"—the discussion of past activities, events, and experiences—is a proven method to improve mood and cognitive agility in older adults.
+1. **Replaced AI Provider**
+   - Removed: `@google/genai` package
+   - Added: `groq-sdk` package
 
-**How Memoria helps:**
+2. **Updated Live Session Hook** (`hooks/useLiveSession.ts`)
+   - Now uses Groq's Whisper API for audio transcription
+   - Uses Groq's `llama-3.3-70b-versatile` model for chat completions
+   - Implements chunk-based audio transcription (3-second intervals)
+   - Detects silence and generates AI responses after 5 seconds of quiet
 
-1.  **Preservation of Self:** For those diagnosed with dementia, the fear of losing one's identity is profound. Memoria captures the user's voice, mannerisms, laughs, and stories while they are still vivid, creating a permanent artifact of *who they are*.
-2.  **The Infinite Patience of AI:** Human caregivers are often exhausted. They may not have the energy to ask "And then what happened?" for the tenth time. The AI host is infinitely patient, gentle, and enthusiastic. It never gets tired, frustrated, or bored.
-3.  **Prompting & Scaffolding:** Cognitive decline can make it hard to maintain a train of thought. Memoria doesn't just record; it listens. If a user trails off or struggles to find a word, the AI gently interjects with a specific, supportive follow-up question to help them continue their story without feeling embarrassed.
-4.  **Multimodal Legacy:** The application saves both high-quality video and a text transcript. This data can serve as a "Digital Twin" foundation—allowing future generations to "interact" with the stories and wisdom of their loved ones long after they are gone.
+3. **API Key Management**
+   - Removed AI Studio specific code
+   - Uses environment variable `VITE_API_KEY` or manual input
+   - Set `dangerouslyAllowBrowser: true` for client-side API calls (see Security Note below)
 
----
+4. **Model Details**
+   - **Transcription**: `whisper-large-v3-turbo` (Groq's Whisper model)
+   - **Chat/Responses**: `llama-3.3-70b-versatile` (Groq's LLaMA model)
 
-## 🛠 Features
+### Setup Instructions
 
-*   **Real-time AI Interviewer:** Uses Gemini Live API to listen to audio/video input and respond verbally with relevant follow-up questions.
-*   **Adaptive Conversations:** The AI detects pauses and context, offering encouragement ("That sounds beautiful, tell me more about the house...") rather than generic prompts.
-*   **Curated Life Review:** Includes a database of psychological "Life Review" questions designed to elicit deep memories.
-*   **Privacy First:** API keys are handled securely. Video processing happens locally in the browser where possible, and recordings are downloaded directly to the user's device.
-*   **Accessible UI:** High contrast, large buttons, and calm "Pastel" aesthetics designed for seniors and non-technical users.
+1. **Install Dependencies**
+   ```bash
+   npm install
+   ```
 
----
+2. **Get Your Groq API Key**
+   - Visit [console.groq.com](https://console.groq.com)
+   - Create an account and generate an API key
 
-## 💻 Technical Stack
+3. **Set Up Environment Variable**
+   Create a `.env` file in the project root:
+   ```env
+   VITE_API_KEY=your_groq_api_key_here
+   ```
 
-*   **Frontend:** React 19, TypeScript, Vite
-*   **AI Model:** Google Gemini 2.5 Flash (via `@google/genai` SDK)
-*   **Styling:** Tailwind CSS (Pastel theme)
-*   **Audio/Video:** Web Audio API (AudioWorklets/ScriptProcessor), MediaRecorder API
+4. **Run the Application**
+   ```bash
+   npm run dev
+   ```
 
----
+### Security Note ⚠️
 
-## 🚀 Getting Started
+The current implementation uses `dangerouslyAllowBrowser: true` to allow Groq API calls directly from the browser. This is **NOT recommended for production** as it exposes your API key.
 
-### Prerequisites
+**For Production:**
+- Create a backend proxy server to handle Groq API calls
+- Never expose API keys in client-side code
+- Use environment variables only on the server side
 
-*   Node.js (v18 or higher)
-*   A Google Cloud Project with the **Gemini API** enabled.
-*   An API Key from [Google AI Studio](https://aistudio.google.com/).
+Example backend setup (Node.js/Express):
+```javascript
+app.post('/api/transcribe', async (req, res) => {
+  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  // Handle transcription here
+});
+```
 
-### Installation
+### Features
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/ecorpnu/memo.git
+- ✅ Real-time audio recording and transcription
+- ✅ AI-powered interviewer that asks follow-up questions
+- ✅ Customizable question sets (JSON/TXT upload)
+- ✅ Multiple aspect ratio support (Portrait, Landscape, Square, 3:4)
+- ✅ Live transcript display
+- ✅ Export transcripts as JSON
+- ✅ Pause/Resume functionality
 
-    cd memo
-    ```
+### How It Works
 
-2.  **Install dependencies:**
-    ```bash
-    npm install
-    ```
+1. **Audio Capture**: Records audio in 3-second chunks using MediaRecorder API
+2. **Transcription**: Sends audio chunks to Groq's Whisper API for transcription
+3. **AI Response**: After 5 seconds of silence, sends transcript to LLaMA model for follow-up questions
+4. **Display**: Shows live transcript and AI interviewer interjections in real-time
 
-3.  **Environment Setup:**
-    Create a `.env` file in the root directory:
-    ```env
-    VITE_API_KEY=your_google_gemini_api_key_here
-    ```
+### Limitations
 
-4.  **Run the application:**
-    ```bash
-    npm run dev
-    ```
+- Browser-based API calls (security concern for production)
+- 3-second chunking may cause slight delays in transcription
+- Conversation history limited to last 20 exchanges to manage context window
 
-5.  Open your browser to the local host link provided (usually `http://localhost:5173`).
+### Cost Considerations
 
----
+Groq pricing (as of creation):
+- Whisper API: Very affordable for transcription
+- LLaMA 3.3 70B: Pay per token for completions
 
-## 🔒 Privacy & Data
+Check [Groq's pricing page](https://groq.com/pricing) for current rates.
 
-This application deals with highly personal biometric data (face and voice).
-*   **No backend storage:** This is a client-side only application. Videos are generated in the browser and downloaded directly to the user's hard drive.
-*   **API Usage:** Audio data is streamed to Google's Gemini API for processing. Please refer to Google's [GenAI Data Privacy terms](https://ai.google.dev/gemini-api/terms).
+### Troubleshooting
 
----
+**"No API Key provided" error:**
+- Ensure `.env` file exists with `VITE_GROQ_API_KEY`
+- Restart dev server after adding environment variables
 
-## 🤝 Contributing
+**Transcription not working:**
+- Check browser console for CORS or API errors
+- Verify API key is valid at console.groq.com
+- Ensure microphone permissions are granted
 
-We welcome contributions, especially those improving accessibility for elderly users (WCAG compliance) or adding new language support for diverse families.
+**AI not responding:**
+- Check that transcription is working first
+- Verify API key has access to chat completions
+- Look for rate limit errors in console
 
-1.  Fork the Project
-2.  Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3.  Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4.  Push to the Branch (`git push origin feature/AmazingFeature`)
-5.  Open a Pull Request
+### Development
 
----
+```bash
+# Install dependencies
+npm install
 
-*Memoria: Because every story deserves to be remembered.*
+# Run development server
+npm run dev
+
+# Build for production
+npm run build
+
+# Preview production build
+npm run preview
+```
+
+### License
+
+See `license.txt` for details.
+
+## Original Project
+
+This is a modified version of the Memoria app, originally built for Google's Gemini AI Studio.
