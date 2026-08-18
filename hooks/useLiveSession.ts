@@ -209,7 +209,7 @@ export const useLiveSession = ({ apiKey, systemInstruction }: UseLiveSessionProp
 
       console.log('→ AI...');
       const completion = await groqClientRef.current.chat.completions.create({
-        model: 'llama-3.3-70b-versatile',
+        model: 'qwen/qwen3.6-27b',
         messages: messages as any,
         temperature: 0.7,
         max_tokens: 150,
